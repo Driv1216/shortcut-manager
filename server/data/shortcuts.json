@@ -1,13 +1,13 @@
 [
   {
-    "id": "36eed650-5a62-4703-8c9c-33eaf97780b7",
+    "id": "ffb6f8ee-4488-4529-9c9f-061e26ea2db1",
     "action": "Toggle Theme",
     "keys": "Shift+Meta+Y",
     "normalizedKeys": "Shift+Meta+Y",
-    "category": "File",
+    "category": "Custom",
     "description": "",
     "enabled": true,
-    "createdAt": "2026-04-11T07:54:55.934Z",
-    "updatedAt": "2026-04-11T07:54:55.934Z"
+    "createdAt": "2026-04-23T21:28:34.855Z",
+    "updatedAt": "2026-04-23T21:28:34.855Z"
   }
 ]

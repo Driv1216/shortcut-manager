@@ -1,114 +1,137 @@
-/**
- * Storage Service
- * Handles JSON file persistence for shortcuts
- * Abstracted so it can later be switched to MongoDB with minimal changes
- */
-
 import { DATA_FILE_PATH } from '../config/constants.js';
-import { readJsonFile, writeJsonFile, fileExists, ensureDirectory } from '../utils/fileHelpers.js';
+import { Shortcut } from '../models/Shortcut.js';
+import { fileExists, readJsonFile } from '../utils/fileHelpers.js';
+import { connectToDatabase } from './databaseService.js';
 
-/**
- * Ensure the data file exists with valid structure
- */
-export async function ensureDataFile() {
-  const exists = await fileExists(DATA_FILE_PATH);
-  if (!exists) {
-    await writeJsonFile(DATA_FILE_PATH, []);
-  } else {
-    // Validate existing file is valid JSON array
-    try {
-      const data = await readJsonFile(DATA_FILE_PATH);
-      if (!Array.isArray(data)) {
-        console.warn('Data file was not an array, resetting...');
-        await writeJsonFile(DATA_FILE_PATH, []);
-      }
-    } catch (error) {
-      console.warn('Data file was malformed, resetting...');
-      await writeJsonFile(DATA_FILE_PATH, []);
-    }
+function normalizeShortcut(doc) {
+  if (!doc) return null;
+
+  const shortcut = typeof doc.toJSON === 'function' ? doc.toJSON() : { ...doc };
+
+  if (!shortcut.id && shortcut._id) {
+    shortcut.id = String(shortcut._id);
   }
-}
 
-/**
- * Get all shortcuts from storage
- * @returns {Promise<Array>} Array of shortcut records
- */
-export async function getAllShortcuts() {
-  const data = await readJsonFile(DATA_FILE_PATH);
-  return Array.isArray(data) ? data : [];
-}
+  delete shortcut._id;
 
-/**
- * Get a single shortcut by ID
- * @param {string} id - Shortcut ID
- * @returns {Promise<Object|null>} Shortcut record or null
- */
-export async function getShortcutById(id) {
-  const shortcuts = await getAllShortcuts();
-  return shortcuts.find(s => s.id === id) || null;
-}
+  if (shortcut.createdAt instanceof Date) {
+    shortcut.createdAt = shortcut.createdAt.toISOString();
+  }
 
-/**
- * Save all shortcuts to storage
- * @param {Array} shortcuts - Array of shortcut records
- */
-export async function saveAllShortcuts(shortcuts) {
-  await writeJsonFile(DATA_FILE_PATH, shortcuts);
-}
+  if (shortcut.updatedAt instanceof Date) {
+    shortcut.updatedAt = shortcut.updatedAt.toISOString();
+  }
 
-/**
- * Add a new shortcut
- * @param {Object} shortcut - Shortcut record to add
- * @returns {Promise<Object>} Added shortcut
- */
-export async function addShortcut(shortcut) {
-  const shortcuts = await getAllShortcuts();
-  shortcuts.push(shortcut);
-  await saveAllShortcuts(shortcuts);
   return shortcut;
 }
 
-/**
- * Update an existing shortcut
- * @param {string} id - Shortcut ID
- * @param {Object} updates - Fields to update
- * @returns {Promise<Object|null>} Updated shortcut or null if not found
- */
+async function readSeedFile() {
+  const exists = await fileExists(DATA_FILE_PATH);
+  if (!exists) return [];
+
+  try {
+    const data = await readJsonFile(DATA_FILE_PATH);
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.warn('Seed file could not be parsed, continuing without seed data.');
+    return [];
+  }
+}
+
+export async function ensureDataFile() {
+  await connectToDatabase();
+  await Shortcut.syncIndexes();
+
+  const existingCount = await Shortcut.estimatedDocumentCount();
+  if (existingCount > 0) {
+    console.log(`Mongo storage initialized (${existingCount} shortcut(s) loaded)`);
+    return;
+  }
+
+  const seedData = await readSeedFile();
+  if (seedData.length === 0) {
+    console.log('Mongo storage initialized (empty collection, no JSON seed found)');
+    return;
+  }
+
+  const normalizedSeedData = seedData.map((shortcut) => ({
+    ...shortcut,
+    createdAt: new Date(shortcut.createdAt),
+    updatedAt: new Date(shortcut.updatedAt)
+  }));
+
+  await Shortcut.insertMany(normalizedSeedData, { ordered: true });
+  console.log(`Mongo storage initialized (${normalizedSeedData.length} shortcut(s) seeded from JSON)`);
+}
+
+export async function getAllShortcuts() {
+  await connectToDatabase();
+  const shortcuts = await Shortcut.find({}).lean();
+  return shortcuts.map(normalizeShortcut);
+}
+
+export async function getShortcutById(id) {
+  await connectToDatabase();
+  const shortcut = await Shortcut.findOne({ id }).lean();
+  return normalizeShortcut(shortcut);
+}
+
+export async function saveAllShortcuts(shortcuts) {
+  await connectToDatabase();
+  await Shortcut.deleteMany({});
+
+  if (shortcuts.length > 0) {
+    await Shortcut.insertMany(
+      shortcuts.map((shortcut) => ({
+        ...shortcut,
+        createdAt: new Date(shortcut.createdAt),
+        updatedAt: new Date(shortcut.updatedAt)
+      })),
+      { ordered: true }
+    );
+  }
+
+  return shortcuts;
+}
+
+export async function addShortcut(shortcut) {
+  await connectToDatabase();
+  const created = await Shortcut.create({
+    ...shortcut,
+    createdAt: new Date(shortcut.createdAt),
+    updatedAt: new Date(shortcut.updatedAt)
+  });
+  return normalizeShortcut(created);
+}
+
 export async function updateShortcut(id, updates) {
-  const shortcuts = await getAllShortcuts();
-  const index = shortcuts.findIndex(s => s.id === id);
-  
-  if (index === -1) {
-    return null;
+  await connectToDatabase();
+  const payload = {
+    ...updates
+  };
+
+  if (payload.createdAt) {
+    payload.createdAt = new Date(payload.createdAt);
   }
-  
-  shortcuts[index] = { ...shortcuts[index], ...updates };
-  await saveAllShortcuts(shortcuts);
-  return shortcuts[index];
+
+  if (payload.updatedAt) {
+    payload.updatedAt = new Date(payload.updatedAt);
+  }
+
+  const updated = await Shortcut.findOneAndUpdate({ id }, payload, {
+    new: true,
+    runValidators: false
+  });
+
+  return normalizeShortcut(updated);
 }
 
-/**
- * Delete a shortcut
- * @param {string} id - Shortcut ID
- * @returns {Promise<Object|null>} Deleted shortcut or null if not found
- */
 export async function deleteShortcut(id) {
-  const shortcuts = await getAllShortcuts();
-  const index = shortcuts.findIndex(s => s.id === id);
-  
-  if (index === -1) {
-    return null;
-  }
-  
-  const deleted = shortcuts.splice(index, 1)[0];
-  await saveAllShortcuts(shortcuts);
-  return deleted;
+  await connectToDatabase();
+  const deleted = await Shortcut.findOneAndDelete({ id });
+  return normalizeShortcut(deleted);
 }
 
-/**
- * Replace all shortcuts (for import)
- * @param {Array} shortcuts - New shortcuts array
- */
 export async function replaceAllShortcuts(shortcuts) {
-  await saveAllShortcuts(shortcuts);
+  return saveAllShortcuts(shortcuts);
 }

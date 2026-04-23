@@ -8,10 +8,18 @@ __v0_jsx-dev-runtime.ts
 next.user-config.*
 
 # Environment variables
+.env
+.env.*
 .env*.local
 
 # Common ignores
 node_modules
 .next/
-.DS_Storeshortcut-manager/
-shortcut-manager/
+.DS_Store
+
+# Keep only deploy-time assets from nested shortcut-manager copy
+shortcut-manager/*
+!shortcut-manager/client/
+!shortcut-manager/client/**
+!shortcut-manager/shared/
+!shortcut-manager/shared/**

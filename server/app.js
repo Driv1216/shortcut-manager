@@ -4,15 +4,55 @@
  */
 
 import express from 'express';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import shortcutRoutes from './routes/shortcutRoutes.js';
 import historyRoutes from './routes/historyRoutes.js';
+import { connectToDatabase, getDatabaseHealth } from './services/databaseService.js';
 import { ensureDataFile } from './services/storageService.js';
 import { rebuildRuntimeIndex } from './services/runtimeIndexService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const APP_ROOT = join(__dirname, '..');
+const ENV_PATHS = [join(APP_ROOT, '.env'), join(APP_ROOT, 'shortcut-manager/.env')];
+
+function loadEnvironmentVariables() {
+  console.log('Loading environment variables...');
+
+  const envPath = ENV_PATHS.find((candidate) => existsSync(candidate));
+
+  if (!envPath) {
+    console.log('No .env file found, using existing process environment');
+    return;
+  }
+
+  const envContent = readFileSync(envPath, 'utf-8');
+
+  envContent.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith('#')) {
+      return;
+    }
+
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex === -1) {
+      return;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const rawValue = trimmed.slice(separatorIndex + 1).trim();
+    const value = rawValue.replace(/^['"]|['"]$/g, '');
+
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  });
+}
+
+loadEnvironmentVariables();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +70,13 @@ app.use('/shared', express.static(sharedDir));
 // API Routes
 app.use('/api/shortcuts', shortcutRoutes);
 app.use('/api/history', historyRoutes);
+app.get('/api/health', (_req, res) => {
+  res.json({
+    success: true,
+    database: getDatabaseHealth(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
 
 // Serve index.html for root
 app.get('/', (req, res) => {
@@ -59,14 +106,12 @@ app.use((err, req, res, next) => {
 async function startServer() {
   try {
     console.log('Initializing Shortcut Manager...');
-    
+
+    await connectToDatabase();
     await ensureDataFile();
-    console.log('Data file ready');
-    
     await rebuildRuntimeIndex();
     console.log('Runtime index initialized');
-    
-    // Start server
+
     app.listen(PORT, () => {
       console.log(`Shortcut Manager running at http://localhost:${PORT}`);
     });
